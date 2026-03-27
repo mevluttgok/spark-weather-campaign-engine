@@ -1,0 +1,223 @@
+services:
+  # ─────────────────────────────────────────────
+  # ZOOKEEPER
+  # ─────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: spark-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - data-net
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────
+  # KAFKA BROKER
+  # ─────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: spark-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 48
+    networks:
+      - data-net
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ─────────────────────────────────────────────
+  # KAFKA TOPIC INIT
+  # ─────────────────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: spark-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - data-net
+    command: >
+      bash -c "
+        echo 'Topic''lar oluşturuluyor...';
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic weather-events          --partitions 3 --replication-factor 1;
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic weather-classified      --partitions 3 --replication-factor 1;
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic campaign-recommendations --partitions 2 --replication-factor 1;
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic alerts                  --partitions 1 --replication-factor 1;
+        echo 'Tamamlandı!';
+        kafka-topics --bootstrap-server kafka:9092 --list;
+      "
+
+  # ─────────────────────────────────────────────
+  # KAFKA UI
+  # ─────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: spark-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - data-net
+
+  # ─────────────────────────────────────────────
+  # SPARK MASTER
+  # ─────────────────────────────────────────────
+  spark-master:
+    image: apache/spark
+    container_name: spark-master
+    restart: unless-stopped
+    user: root
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    environment:
+      SPARK_MASTER_HOST: 0.0.0.0
+    ports:
+      - "9090:8080"
+      - "7077:7077"
+    networks:
+      - data-net
+    volumes:
+      - ./spark_jobs:/opt/spark_jobs
+      - ./data_lake:/opt/data_lake
+
+  # ─────────────────────────────────────────────
+  # SPARK WORKER
+  # ─────────────────────────────────────────────
+  spark-worker:
+    image: apache/spark
+    container_name: spark-worker
+    restart: unless-stopped
+    user: root
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    ports:
+      - "8081:8081"
+    networks:
+      - data-net
+    volumes:
+      - ./spark_jobs:/opt/spark_jobs
+      - ./data_lake:/opt/data_lake
+
+  # ─────────────────────────────────────────────
+  # WEATHER PRODUCER — Open-Meteo → Kafka
+  # ─────────────────────────────────────────────
+  producer-weather:
+    build:
+      context: ./producers
+      dockerfile: Dockerfile
+    container_name: spark-producer-weather
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PRODUCER_TYPE: weather
+      POLL_INTERVAL: "60"
+    networks:
+      - data-net
+
+  # ─────────────────────────────────────────────
+  # SPARK STREAMING — Hava analizi + sınıflandırma
+  # ─────────────────────────────────────────────
+  spark-streaming:
+    build:
+      context: ./spark_jobs
+      dockerfile: Dockerfile
+    container_name: spark-streaming
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      spark-master:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPARK_MASTER_URL: spark://spark-master:7077
+      DATA_LAKE_PATH: /opt/data_lake
+      CHECKPOINT_PATH: /opt/checkpoints
+    networks:
+      - data-net
+    volumes:
+      - ./data_lake:/opt/data_lake
+      - ./checkpoints:/opt/checkpoints
+
+  # ─────────────────────────────────────────────
+  # CAMPAIGN ENGINE — Hava + Gemini LLM → Kampanya
+  # ─────────────────────────────────────────────
+  campaign-engine:
+    build:
+      context: ./campaign_engine
+      dockerfile: Dockerfile
+    container_name: spark-campaign-engine
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: gemini-1.5-flash-latest
+      CAMPAIGN_POLL_INTERVAL: "300"
+      NUM_CAMPAIGNS_PER_CITY: "3"
+    networks:
+      - data-net
+
+  # ─────────────────────────────────────────────
+  # STREAMLIT DASHBOARD
+  # ─────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: spark-dashboard
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DATA_LAKE_PATH: /opt/data_lake
+    networks:
+      - data-net
+    volumes:
+      - ./data_lake:/opt/data_lake
+
+networks:
+  data-net:
+    driver: bridge
