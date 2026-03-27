@@ -102,12 +102,12 @@ def kafka_read(topic: str, n: int = 50, timeout_ms: int = 4000) -> list[dict]:
         return []
 
 
-@st.cache_data(ttl=REFRESH_SEC)
+@st.cache_data(ttl=REFRESH_SEC, show_spinner="🎯 Kampanyalar yükleniyor...")
 def get_campaigns() -> list[dict]:
     return kafka_read("campaign-recommendations", n=100)
 
 
-@st.cache_data(ttl=REFRESH_SEC)
+@st.cache_data(ttl=REFRESH_SEC, show_spinner="🌤️ Hava verileri güncelleniyor...")
 def get_weather() -> pd.DataFrame:
     files = glob.glob(f"{DATA_LAKE}/weather/raw/**/*.parquet", recursive=True)
     if not files:
@@ -119,7 +119,7 @@ def get_weather() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=REFRESH_SEC)
+@st.cache_data(ttl=REFRESH_SEC, show_spinner="🚨 Aktif uyarılar kontrol ediliyor...")
 def get_alerts() -> list[dict]:
     return kafka_read("alerts", n=30)
 

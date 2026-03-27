@@ -71,36 +71,40 @@ def fetch_weather() -> list[dict]:
             resp = requests.get(OPEN_METEO_URL, params={
                 "latitude": city_info["lat"],
                 "longitude": city_info["lon"],
-                "current": [
-                    "temperature_2m", "relative_humidity_2m", "apparent_temperature",
-                    "weather_code", "wind_speed_10m", "wind_direction_10m",
-                    "surface_pressure", "precipitation", "cloud_cover",
+                "daily": [
+                    "weather_code", "temperature_2m_max", "precipitation_sum", "wind_speed_10m_max"
                 ],
                 "timezone": "auto",
                 "wind_speed_unit": "kmh",
+                "forecast_days": 3,
             }, timeout=10)
             resp.raise_for_status()
             data = resp.json()
-            current = data.get("current", {})
-            code = current.get("weather_code", 0)
-            records.append({
-                "city":               city_info["city"],
-                "latitude":           city_info["lat"],
-                "longitude":          city_info["lon"],
-                "temperature_c":      current.get("temperature_2m"),
-                "feels_like_c":       current.get("apparent_temperature"),
-                "humidity_pct":       current.get("relative_humidity_2m"),
-                "wind_speed_kmh":     current.get("wind_speed_10m"),
-                "wind_direction_deg": current.get("wind_direction_10m"),
-                "pressure_hpa":       current.get("surface_pressure"),
-                "precipitation_mm":   current.get("precipitation"),
-                "cloud_cover_pct":    current.get("cloud_cover"),
-                "weather_code":       code,
-                "weather_desc":       WEATHER_CODES.get(code, "Bilinmiyor"),
-                "observation_time":   current.get("time"),
-                "ingested_at":        datetime.now(timezone.utc).isoformat(),
-                "producer":           "WeatherProducer",
-            })
+            daily = data.get("daily", {})
+            
+            # Index 0 is today, 1 is tomorrow, 2 is the day after tomorrow
+            for day_idx in [1, 2]:
+                try:
+                    date_str = daily.get("time", [])[day_idx]
+                    code = daily.get("weather_code", [])[day_idx]
+                    records.append({
+                        "city":               city_info["city"],
+                        "latitude":           city_info["lat"],
+                        "longitude":          city_info["lon"],
+                        "temperature_c":      daily.get("temperature_2m_max", [])[day_idx],
+                        "feels_like_c":       daily.get("temperature_2m_max", [])[day_idx], # Apparent not available in daily, use max
+                        "humidity_pct":       50.0, # Default for now
+                        "wind_speed_kmh":     daily.get("wind_speed_10m_max", [])[day_idx],
+                        "precipitation_mm":   daily.get("precipitation_sum", [])[day_idx],
+                        "weather_code":       code,
+                        "weather_desc":       WEATHER_CODES.get(code, "Bilinmiyor"),
+                        "observation_time":   datetime.now(timezone.utc).isoformat(),
+                        "target_date":        date_str,
+                        "ingested_at":        datetime.now(timezone.utc).isoformat(),
+                        "producer":           "WeatherProducer",
+                    })
+                except IndexError:
+                    pass
         except Exception as e:
             logger.error(f"{city_info['city']} verisi alınamadı: {e}")
     return records
@@ -114,7 +118,9 @@ def run():
         sent = 0
         for rec in records:
             try:
-                future = producer.send("weather-events", value=rec, key=rec["city"])
+                # Key allows grouping by city and target_date in Kafka if log compaction was used
+                kafka_key = f"{rec['city']}_{rec['target_date']}"
+                future = producer.send("weather-events", value=rec, key=kafka_key)
                 future.get(timeout=10)
                 sent += 1
             except KafkaError as e:

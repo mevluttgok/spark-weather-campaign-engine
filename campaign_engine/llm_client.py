@@ -64,16 +64,16 @@ def build_prompt(profile: WeatherProfile, num_campaigns: int = 3) -> str:
     prompt = f"""
 {icon} Hava Durumu Analizi:
 - Şehir: {profile.city}
-- Tarih: {profile.date} ({profile.weekday})
+- Hedef Tarih: {profile.date} ({profile.weekday})
 - Hava Durumu: {profile.weather_desc} ({profile.category.value})
-- Sıcaklık: {profile.temperature_c:.1f}°C (hissedilen: {profile.feels_like_c or '?'}°C)
-- Nem: {profile.humidity_pct or '?'}%
-- Yağış: {profile.precipitation_mm or 0:.1f} mm
+- Maksimum Sıcaklık: {profile.temperature_c:.1f}°C
+- Beklenen Yağış: {profile.precipitation_mm or 0:.1f} mm
 - Rüzgar: {profile.wind_speed_kmh or 0:.0f} km/h
 
 Bu havada satışı artması beklenen ürün kategorileri: {hints}
 
-Lütfen bu şehir ve hava koşulları için **{num_campaigns} adet** ürün kampanyası öner.
+Lütfen bu şehir ve belirtilen hedef tarih **({profile.date}, {profile.weekday})** için **{num_campaigns} adet** özel ürün kampanyası öner.
+Kampanya mesajlarında "Yarın", "{profile.weekday} günü", "Önümüzdeki hava durumuna göre" gibi ileriye dönük (forecast) bir perakende dili kullan!
 Her kampanya farklı bir ürün kategorisine odaklanmalı.
 
 Döndüreceğin format (SADECE JSON, başka hiçbir şey yazma):

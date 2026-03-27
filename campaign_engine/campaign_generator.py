@@ -71,15 +71,16 @@ def create_producer() -> KafkaProducer:
 # ─── Cache: aynı şehir+kategori için tekrar LLM çağırma ──────────────────────
 class CategoryCache:
     """
-    Her şehir için en son hava kategorisini tutar.
+    Her şehir + hedef gün için en son hava kategorisini tutar.
     Sadece kategori değiştiğinde LLM çağrısı yapılır.
     """
     def __init__(self):
-        self._last: dict[str, WeatherCategory] = {}
+        self._last: dict[tuple[str, str], WeatherCategory] = {}
 
-    def has_changed(self, city: str, cat: WeatherCategory) -> bool:
-        prev = self._last.get(city)
-        self._last[city] = cat
+    def has_changed(self, city: str, target_date: str, cat: WeatherCategory) -> bool:
+        key = (city, target_date)
+        prev = self._last.get(key)
+        self._last[key] = cat
         return prev != cat
 
     def reset(self):
@@ -97,24 +98,25 @@ def process_weather_batch(
     Bir batch hava mesajını işle.
     Şehir başına en güncel mesajı seç, kategorisi değişmişse LLM çağır.
     """
-    # Şehir başına en son kaydı al
-    latest_by_city: dict[str, dict] = {}
+    # Şehir+Tarih ikilisine göre en son kaydı al
+    latest_by_key: dict[tuple[str, str], dict] = {}
     for msg in messages:
         city = msg.get("city", "?")
-        latest_by_city[city] = msg
+        t_date = msg.get("target_date", "?")
+        latest_by_key[(city, t_date)] = msg
 
     campaigns_published = 0
-    for city, weather in latest_by_city.items():
+    for (city, t_date), weather in latest_by_key.items():
         try:
             profile = build_profile(weather)
             logger.info(
-                f"📍 {city}: {profile.category.value} | "
+                f"📍 {city} ({t_date}): {profile.category.value} | "
                 f"{profile.temperature_c:.1f}°C | {profile.weather_desc}"
             )
 
             # Kategori değişmediyse LLM çağırma
-            if not cache.has_changed(city, profile.category):
-                logger.info(f"  ↩️  {city} — kategori değişmedi, LLM atlanıyor")
+            if not cache.has_changed(city, t_date, profile.category):
+                logger.info(f"  ↩️  {city} ({t_date}) — kategori değişmedi, LLM atlanıyor")
                 continue
 
             # Kampanya üret

@@ -52,6 +52,7 @@ class WeatherProfile:
     product_hints: list[str] = field(default_factory=list)
     channel_hint:  str = "both"        # online | store | both
     urgency:       str = "normal"       # immediate | today | this_week | normal
+    target_date:   str = ""             # 2-day forecast date (YYYY-MM-DD)
 
 
 # ─── Ürün önerileri ve bağlam ───────────────────────────────────────────────
@@ -159,11 +160,20 @@ def build_profile(weather_event: dict) -> WeatherProfile:
     cat = classify(temp, code, precip, wind)
     ctx = CATEGORY_CONTEXT[cat]
 
-    # Tarih ve gün bilgisi
-    try:
-        dt = datetime.fromisoformat(ingested.replace("Z", "+00:00"))
-    except Exception:
-        dt = datetime.utcnow()
+    # Tarih ve gün bilgisi (Hedef forecast gününden)
+    target_date = weather_event.get("target_date", "")
+    if target_date:
+        try:
+            dt = datetime.strptime(target_date, "%Y-%m-%d")
+        except ValueError:
+            dt = datetime.utcnow()
+    else:
+        try:
+            dt = datetime.fromisoformat(ingested.replace("Z", "+00:00"))
+        except Exception:
+            dt = datetime.utcnow()
+        target_date = dt.strftime("%Y-%m-%d")
+
     date_str = dt.strftime("%d %B %Y")
     weekday  = WEEKDAY_TR[dt.weekday()]
 
@@ -182,4 +192,5 @@ def build_profile(weather_event: dict) -> WeatherProfile:
         product_hints=ctx["product_hints"],
         channel_hint=ctx["channel_hint"],
         urgency=ctx["urgency"],
+        target_date=target_date,
     )
