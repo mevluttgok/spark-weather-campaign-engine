@@ -47,3 +47,4 @@ spark/
 - **Depolama:** Parquet (Local Data Lake)
 - **Görselleştirme:** Streamlit, Plotly
 - **Orkestrasyon:** Docker Compose
+# spark-weather-campaign-engine
